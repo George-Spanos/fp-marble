@@ -1,10 +1,9 @@
-import { HttpEffectResponse, HttpStatus, r } from '@marblejs/http';
+import { HttpStatus, r } from '@marblejs/http';
 import { task } from 'fp-ts';
 import { pipe } from 'fp-ts/lib/function';
-import { Task } from 'fp-ts/lib/Task';
 import * as TE from 'fp-ts/lib/TaskEither';
-import { from, Observable } from 'rxjs';
-import { map, mergeMap, switchMap, tap } from 'rxjs/operators';
+import { from } from 'rxjs';
+import { switchMap } from 'rxjs/operators';
 interface Pet {
     id: string;
     walletAdress: string;
@@ -13,14 +12,33 @@ interface Pet {
 }
 
 const api = `https://623a459cb5292b8bfcb33f6c.mockapi.io/`;
-
-const fetchPets: Task<HttpEffectResponse> =
-    pipe(TE.tryCatch(
-        () => (fetch(api + 'Pets')),
-        (reason) => new Error(reason as string)),
-        TE.chain(response => TE.tryCatch(() => response.json() as Promise<Pet[]>,
-            (reason => new Error(reason as string)))),
-        TE.fold(e => task.of<HttpEffectResponse>({ status: 500, body: e }), a => task.of({ body: a }))
+const fetchPets = TE.tryCatch(
+    () => (fetch(api + 'Pet').then(response => {
+        if (!response.ok) {
+            throw response.statusText;
+        };
+        return response;
+    })),
+    (reason) => {
+        if (typeof reason === 'string') {
+            return new Error(reason as string);
+        }
+        return Error('error happened');
+    },
+);
+const parsePetsResponse = (response: Response) => TE.tryCatch(
+    () => response.json() as Promise<Pet[]>,
+    (reason) => new Error(reason as string)
+);
+const getPets =
+    pipe(fetchPets,
+        TE.chain(parsePetsResponse),
+        TE.foldW(
+            e => task.of({
+                status: HttpStatus.INTERNAL_SERVER_ERROR, body: e.message
+            })
+            ,
+            a => task.of({ status: HttpStatus.OK, body: a }))
     );
 ;
 export const api$ = r.pipe(
@@ -28,7 +46,6 @@ export const api$ = r.pipe(
     r.matchType('GET'),
     r.useEffect(req$ => {
         return req$.pipe(
-            switchMap(req => pipe(fetchPets(), from)),
-            tap(console.log)
+            switchMap(req => pipe(getPets(), from)),
         );
     }));
